@@ -2,6 +2,7 @@
 #include <cmath>
 #include <vector>
 #include <utility>
+#include <vector>
 
 #include "rclcpp/rclcpp.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -31,17 +32,23 @@ public:
             std::chrono::milliseconds(static_cast<int>(dt_ * 1000)),
             std::bind(&Go2PathFollower::timer_callback, this));
 
-        // 경로 설정 (직선 4점 예시)
+        // 경로 설정 단위 m
         path_points_ = {
             {1.0, 0.0},
-            {1.0, 1.0},
-            {2.0, 1.0},
-            {2.0, 2.0}};
+            {2.0, 2.0},
+            {2.0, 4.0},
+            {4.0, 4.0}};
 
         RCLCPP_INFO(this->get_logger(), "Go2PathFollower 노드 시작됨");
     }
 
 private:
+    struct Point
+    {
+        double x;
+        double y;
+    };
+
     void state_callback(const unitree_go::msg::SportModeState::SharedPtr msg)
     /**
      * @brief 초기 위치를 설정한다.
@@ -54,11 +61,18 @@ private:
             py0_ = msg->position[1];
             yaw0_ = msg->imu_state.rpy[2];
             RCLCPP_INFO(this->get_logger(), "초기 위치 설정됨: (%.2f, %.2f, %.2f)", px0_, py0_, yaw0_);
+            //! 0 is idle
+            //! 1 is trot
+            //! 2 is trot running
+            //! 3 is forward climbing mode
+            //! 4 is reverse climbing mode
+            sport_req_.SwitchGait(req_, 3); // 로봇 걸음걸이 바꾸기
+            req_pub_->publish(req_);
         }
     }
 
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
-        /**
+    /**
      * @brief odometry 좌표를 받아온다.
      * @param msg odometry 좌표
      */
@@ -84,60 +98,92 @@ private:
             return;
         }
 
-        // 경로 생성 (sin 곡선 or 주어진 점으로)
+        // 경로 생성
         std::vector<PathPoint> path;
-        double time_seg = 0.2;// 점과 점 사이를 이동하는데 걸리는 시간
+        double time_seg = 0.2; // 점과 점 사이를 이동하는데 걸리는 시간
         double time_temp = t_ - time_seg;
 
         for (size_t i = current_target_idx_; i < path_points_.size(); ++i)
         {
-            PathPoint pt;
-            pt.timeFromStart = (i - current_target_idx_) * time_seg;
+            PathPoint path_point_tmp;
 
-            double target_x = path_points_[i].first;
-            double target_y = path_points_[i].second;
+            path_point_tmp.timeFromStart = (i - current_target_idx_) * time_seg;
 
-            // 현재 좌표계에 맞춰 변환
-            double dx = target_x - px0_;
-            double dy = target_y - py0_;
+            std::vector<Point> temppoints = generateWaypoints(path_points_[i],path_points_[i+1]);
+            for(size_t j = 0; j < temppoints.size(); j++)
+            {
 
-            pt.x = dx * std::cos(yaw0_) - dy * std::sin(yaw0_) + px0_;
-            pt.y = dx * std::sin(yaw0_) + dy * std::cos(yaw0_) + py0_;
-            pt.yaw = yaw0_; // 기본 yaw 유지
-            pt.vx = 0.5;    // x 방향 속도 0.5 m/s (임의)
-            pt.vy = 0.0;    // y 방향 속도 0
-            pt.vyaw = 0.0;  // 회전 속도 0
 
-            path.push_back(pt);
+                double target_x = temppoints[j].x;
+                double target_y = temppoints[j].y;
+
+                        // 현재 좌표계에 맞춰 변환
+                double dx = target_x - px0_;
+                double dy = target_y - py0_;
+
+                dx = 0.5*0.5;
+                dy = 0;
+
+                path_point_tmp.x = dx * std::cos(yaw0_) - dy * std::sin(yaw0_) + px0_;
+                path_point_tmp.y = dx * std::sin(yaw0_) + dy * std::cos(yaw0_) + py0_;
+                path_point_tmp.yaw = yaw0_; // 기본 yaw 유지
+                path_point_tmp.vx = 0.5;    // x 방향 속도 0.5 m/s (임의)
+                path_point_tmp.vy = 0.0;    // y 방향 속도 0
+                path_point_tmp.vyaw = 0.0;  // 회전 속도 0
+
+                path.push_back(path_point_tmp);
+
+
+
+
+
+
+                // double target_x = path_points_[i].first;
+                // double target_y = path_points_[i].second;
+
+                // // 현재 좌표계에 맞춰 변환
+                // double dx = target_x - px0_;
+                // double dy = target_y - py0_;
+
+                // path_point_tmp.x = dx * std::cos(yaw0_) - dy * std::sin(yaw0_) + px0_;
+                // path_point_tmp.y = dx * std::sin(yaw0_) + dy * std::cos(yaw0_) + py0_;
+                // path_point_tmp.yaw = yaw0_; // 기본 yaw 유지
+                // path_point_tmp.vx = 0.5;    // x 방향 속도 0.5 m/s (임의)
+                // path_point_tmp.vy = 0.0;    // y 방향 속도 0
+                // path_point_tmp.vyaw = 0.0;  // 회전 속도 0
+
+                // path.push_back(path_point_tmp);
+
+            }
+
+
         }
-
-        // for (int i = 0; i < 30; i++)
-        // {
-        //     PathPoint pt;
-        //     time_temp += time_seg;
-
-        //     double px_local = 0.5 * std::sin(0.5 * time_temp);
-        //     double py_local = 0.0;
-        //     double vx_local = 0.5 * std::cos(0.5 * time_temp);
-        //     double vy_local = 0.0;
-        //     double yaw_local = 0.0;
-        //     double vyaw_local = 0.0;
-
-        //     pt.timeFromStart = i * time_seg;
-        //     pt.x = px_local * std::cos(yaw0_) - py_local * std::sin(yaw0_) + px0_;
-        //     pt.y = px_local * std::sin(yaw0_) + py_local * std::cos(yaw0_) + py0_;
-        //     pt.yaw = yaw_local + yaw0_;
-        //     pt.vx = vx_local * std::cos(yaw0_) - vy_local * std::sin(yaw0_);
-        //     pt.vy = vx_local * std::sin(yaw0_) + vy_local * std::cos(yaw0_);
-        //     pt.vyaw = vyaw_local;
-
-        //     path.push_back(pt);
-        // }
 
         sport_req_.TrajectoryFollow(req_, path);
         req_pub_->publish(req_);
-
         RCLCPP_INFO(this->get_logger(), "Go2 경로 요청 전송 중...");
+    }
+
+    std::vector<Point> generateWaypoints(Point start, Point end, double step = 0.15)
+    {
+        std::vector<Point> waypoints;
+
+        double dx = end.x - start.x;
+        double dy = end.y - start.y;
+        double distance = std::sqrt(dx * dx + dy * dy);
+
+        int numSteps = std::floor(distance / step);
+
+        for (int i = 0; i <= numSteps; ++i)
+        {
+            double t = static_cast<double>(i) / numSteps;
+            Point wp;
+            wp.x = start.x + t * dx;
+            wp.y = start.y + t * dy;
+            waypoints.push_back(wp);
+        }
+
+        return waypoints;
     }
 
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
@@ -148,7 +194,8 @@ private:
     SportClient sport_req_;
     unitree_api::msg::Request req_;
 
-    std::vector<std::pair<double, double>> path_points_;
+    //std::vector<std::pair<double, double>> path_points_;
+    std::vector<Point> path_points_;
     size_t current_target_idx_;
 
     double current_x_ = 0.0, current_y_ = 0.0, current_yaw_ = 0.0;
